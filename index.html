@@ -1,202 +1,375 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-Hant">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#1d6fa5">
     <title>養魚小遊戲</title>
+    <link rel="icon" href="image/fish_image.png" type="image/png">
+    <link rel="preload" as="image" href="image/bg.webp">
+    <link rel="preload" as="image" href="image/fish_image.png">
     <style>
-        body {
+        :root {
+            --panel-bg: rgba(255, 255, 255, 0.78);
+            --panel-border: rgba(255, 255, 255, 0.5);
+            --accent: #1d6fa5;
+        }
+        * { box-sizing: border-box; }
+        html, body {
             margin: 0;
+            height: 100%;
             overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC",
+                         "Microsoft JhengHei", Roboto, sans-serif;
+            color: #143b55;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: none;
+        }
+        body {
             background: url('image/bg.webp') repeat;
+            user-select: none;
         }
         .fish {
             position: absolute;
-            width: 100px; /* 初始大小为100px */
+            top: 0;
+            left: 0;
+            width: 50px;
             height: auto;
-            transition: width 0.3s; /* 添加平滑过渡效果 */
+            transform: translate3d(0, 0, 0);
+            transition: width 0.3s ease;
+            will-change: transform;
+            pointer-events: none;
+            filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.25));
         }
         .food {
             position: absolute;
-            width: 20px;
-            height: 20px;
-            background-color: red;
+            width: 14px;
+            height: 14px;
+            margin: -7px 0 0 -7px;
+            background: radial-gradient(circle at 35% 35%, #ff6b6b 0%, #c0392b 70%, #7a1d12 100%);
             border-radius: 50%;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+            pointer-events: none;
+            animation: foodDrop 0.25s ease-out;
+        }
+        @keyframes foodDrop {
+            from { transform: scale(0.2); opacity: 0; }
+            to   { transform: scale(1);   opacity: 1; }
         }
         #ripple-container {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            z-index: -1; /* 確保 ripple-container 在魚的下面 */
+            position: fixed;
+            inset: 0;
+            z-index: 0;
         }
         #controls {
-            position: absolute;
-            top: 10px;
-            left: 10px;
+            position: fixed;
+            top: 12px;
+            left: 12px;
             z-index: 10;
-            background: rgba(255, 255, 255, 0.7);
-            padding: 10px;
-            border-radius: 5px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            padding: 10px 14px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 10px;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+            font-size: 14px;
+        }
+        #controls label { font-weight: 600; }
+        #controls input[type="range"] { width: 140px; accent-color: var(--accent); }
+        #fishCountValue {
+            display: inline-block;
+            min-width: 2.5ch;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            font-weight: 600;
+            color: var(--accent);
+        }
+        #controls button {
+            padding: 4px 10px;
+            border: 1px solid var(--accent);
+            background: white;
+            color: var(--accent);
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.15s, color 0.15s;
+        }
+        #controls button:hover { background: var(--accent); color: white; }
+        #hint {
+            position: fixed;
+            bottom: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            padding: 6px 14px;
+            background: var(--panel-bg);
+            border-radius: 999px;
+            font-size: 13px;
+            opacity: 0;
+            animation: fadeHint 4s ease forwards;
+            pointer-events: none;
+        }
+        @keyframes fadeHint {
+            0%   { opacity: 0; }
+            15%  { opacity: 1; }
+            85%  { opacity: 1; }
+            100% { opacity: 0; }
+        }
+        @media (max-width: 480px) {
+            #controls { font-size: 13px; padding: 8px 10px; gap: 8px; }
+            #controls input[type="range"] { width: 100px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .fish { transition: none; }
+            .food { animation: none; }
         }
     </style>
 </head>
 <body>
     <div id="controls">
-        <label for="fishCount">Fish Count:</label>
-        <input type="number" id="fishCount" value="1" min="1" max="100">
+        <label for="fishCount">魚的數量</label>
+        <input type="range" id="fishCount" value="1" min="1" max="100" step="1">
+        <span id="fishCountValue">1</span>
+        <button id="clearFood" type="button" title="清除所有飼料">清除飼料</button>
     </div>
     <div id="ripple-container"></div>
+    <div id="hint">點擊任意處撒飼料 🐟</div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery.ripples/0.5.3/jquery.ripples.min.js"></script>
     <script>
-        const rippleContainer = $('#ripple-container');
-        let fishIntervals = [];
-        const fishGrowthStep = 25; // 每次長大的步伐大小
-        const maxFishSize = 200; // 魚的最大大小
+    (function () {
+        'use strict';
 
-        function getRandomDirection() {
-            const angle = Math.random() * 2 * Math.PI; // 随机生成0到2π之间的角度
-            return { x: Math.cos(angle), y: Math.sin(angle) }; // 返回单位向量
+        const $ripple = $('#ripple-container');
+        const controls = document.getElementById('controls');
+        const fishCountInput = document.getElementById('fishCount');
+        const fishCountValue = document.getElementById('fishCountValue');
+        const clearFoodBtn = document.getElementById('clearFood');
+
+        const INITIAL_FISH_SIZE = 50;
+        const FISH_GROWTH_STEP = 15;
+        const MAX_FISH_SIZE = 200;
+        const FISH_SPEED = 60;          // px per second
+        const RIPPLE_INTERVAL = 0.25;   // seconds between fish wake ripples
+
+        let viewportW = window.innerWidth;
+        let viewportH = window.innerHeight;
+
+        const fishList = [];
+        const foodList = [];
+
+        let rippleEnabled = false;
+        try {
+            $ripple.ripples({ resolution: 512, dropRadius: 20, perturbance: 0.04 });
+            rippleEnabled = true;
+        } catch (e) {
+            // WebGL not supported – fall back gracefully without ripples
+            console.warn('Ripples unavailable:', e && e.message);
         }
 
-        function createFishElement() {
-            const fish = document.createElement('img');
-            fish.src = 'image/fish_image.png';
-            fish.className = 'fish';
-            fish.style.width = '50px'; // 初始大小为100px
-            document.body.appendChild(fish);
-            return fish;
+        function randomDirection() {
+            const a = Math.random() * Math.PI * 2;
+            return { x: Math.cos(a), y: Math.sin(a) };
         }
 
-        function createFoodElement(x, y) {
-            const food = document.createElement('div');
-            food.className = 'food';
-            food.style.left = `${x - 10}px`; // 中心对齐
-            food.style.top = `${y - 10}px`; // 中心对齐
-            document.body.appendChild(food);
-            return food;
+        function createFish() {
+            const el = document.createElement('img');
+            el.src = 'image/fish_image.png';
+            el.className = 'fish';
+            el.draggable = false;
+            el.alt = '';
+            const size = INITIAL_FISH_SIZE;
+            el.style.width = size + 'px';
+            document.body.appendChild(el);
+
+            const dir = randomDirection();
+            return {
+                el,
+                size,
+                x: Math.random() * Math.max(1, viewportW - size),
+                y: Math.random() * Math.max(1, viewportH - size),
+                dx: dir.x,
+                dy: dir.y,
+                rippleAccum: Math.random() * RIPPLE_INTERVAL,
+                lastAngle: 0
+            };
         }
 
-        function moveFish(fish, direction) {
-            let x = Math.random() * (window.innerWidth - fish.clientWidth);
-            let y = Math.random() * (window.innerHeight - fish.clientHeight);
-            let { x: directionX, y: directionY } = direction;
-            let rippleTimer = 0;
-
-            function updatePosition() {
-                const step = 5; // 每次移動的步伐大小
-
-                let nearestFood = null;
-                let nearestDistance = Infinity;
-
-                // 找到最近的飼料
-                document.querySelectorAll('.food').forEach(food => {
-                    const foodRect = food.getBoundingClientRect();
-                    const fishRect = fish.getBoundingClientRect();
-                    const distance = Math.sqrt(Math.pow(foodRect.left - fishRect.left, 2) + Math.pow(foodRect.top - fishRect.top, 2));
-
-                    if (distance < nearestDistance) {
-                        nearestDistance = distance;
-                        nearestFood = food;
-                    }
-                });
-
-                // 朝最近的飼料移動
-                if (nearestFood) {
-                    const foodRect = nearestFood.getBoundingClientRect();
-                    const dx = foodRect.left - x;
-                    const dy = foodRect.top - y;
-                    const magnitude = Math.sqrt(dx * dx + dy * dy);
-                    directionX = dx / magnitude;
-                    directionY = dy / magnitude;
-                }
-
-                x += step * directionX;
-                y += step * directionY;
-
-                // 確保魚不會超出螢幕範圍
-                if (x <= 0 || x >= window.innerWidth - fish.clientWidth) {
-                    directionX = -directionX; // 反转X方向
-                }
-                if (y <= 0 || y >= window.innerHeight - fish.clientHeight) {
-                    directionY = -directionY; // 反转Y方向
-                }
-
-                // 計算旋轉角度
-                const angle = Math.atan2(directionY, directionX) * (180 / Math.PI) + 90;
-                fish.style.transform = `translate(${x}px, ${y}px) rotate(${angle}deg)`;
-
-                // 每隔500毫秒生成一次水波
-                if (rippleTimer % 5 === 0) {
-                    const tailX = x + fish.clientWidth / 2 + Math.cos((angle - 90) * Math.PI / 180);
-                    const tailY = y + fish.clientHeight / 2 + Math.sin((angle - 90) * Math.PI / 180);
-                    rippleContainer.ripples('drop', tailX, tailY, 30, 0.1);
-
-                    // 设置一个定时器，在几秒后将扰动度设为0
-                    setTimeout(() => {
-                        rippleContainer.ripples('drop', tailX, tailY, 30, 0);
-                    }, 2000); // 2秒后波纹消失
-                }
-                rippleTimer++;
-
-                // 檢測與飼料的碰撞
-                document.querySelectorAll('.food').forEach(food => {
-                    const foodRect = food.getBoundingClientRect();
-                    const fishRect = fish.getBoundingClientRect();
-                    if (foodRect.left < fishRect.right &&
-                        foodRect.right > fishRect.left &&
-                        foodRect.top < fishRect.bottom &&
-                        foodRect.bottom > fishRect.top) {
-                        // 魚吃到了飼料
-                        food.remove();
-                        let newSize = Math.min(parseInt(fish.style.width) + fishGrowthStep, maxFishSize);
-                        fish.style.width = `${newSize}px`;
-                    }
-                });
-            }
-
-            const intervalId = setInterval(updatePosition, 100); // 每100毫秒移動一次
-            fishIntervals.push(intervalId);
+        function clearFish() {
+            for (const f of fishList) f.el.remove();
+            fishList.length = 0;
         }
 
-        function createFish(fishCount) {
-            // 清除所有之前的intervals
-            fishIntervals.forEach(intervalId => clearInterval(intervalId));
-            fishIntervals = [];
-            document.querySelectorAll('.fish').forEach(fish => fish.remove());
-
-            for (let i = 0; i < fishCount; i++) {
-                const fish = createFishElement();
-                const direction = getRandomDirection();
-                moveFish(fish, direction);
+        function setFishCount(n) {
+            n = Math.max(1, Math.min(100, parseInt(n, 10) || 1));
+            fishCountValue.textContent = n;
+            if (n === fishList.length) return;
+            if (n < fishList.length) {
+                while (fishList.length > n) fishList.pop().el.remove();
+            } else {
+                while (fishList.length < n) fishList.push(createFish());
             }
         }
 
-        document.getElementById('fishCount').addEventListener('input', (event) => {
-            const fishCount = event.target.value;
-            createFish(fishCount);
+        function addFood(x, y) {
+            const el = document.createElement('div');
+            el.className = 'food';
+            el.style.left = x + 'px';
+            el.style.top = y + 'px';
+            document.body.appendChild(el);
+            foodList.push({ el, x, y });
+        }
+
+        function clearAllFood() {
+            for (const f of foodList) f.el.remove();
+            foodList.length = 0;
+        }
+
+        function removeFood(idx) {
+            foodList[idx].el.remove();
+            foodList.splice(idx, 1);
+        }
+
+        function updateFish(fish, dt) {
+            // Seek nearest food
+            let nearest = null;
+            let nearestD2 = Infinity;
+            const fcx = fish.x + fish.size / 2;
+            const fcy = fish.y + fish.size / 2;
+            for (let i = 0; i < foodList.length; i++) {
+                const fd = foodList[i];
+                const ddx = fd.x - fcx;
+                const ddy = fd.y - fcy;
+                const d2 = ddx * ddx + ddy * ddy;
+                if (d2 < nearestD2) {
+                    nearestD2 = d2;
+                    nearest = fd;
+                }
+            }
+            if (nearest) {
+                const ddx = nearest.x - fcx;
+                const ddy = nearest.y - fcy;
+                const m = Math.hypot(ddx, ddy) || 1;
+                fish.dx = ddx / m;
+                fish.dy = ddy / m;
+            }
+
+            fish.x += FISH_SPEED * fish.dx * dt;
+            fish.y += FISH_SPEED * fish.dy * dt;
+
+            const maxX = viewportW - fish.size;
+            const maxY = viewportH - fish.size;
+            if (fish.x < 0)     { fish.x = 0;    fish.dx = Math.abs(fish.dx); }
+            if (fish.x > maxX)  { fish.x = maxX; fish.dx = -Math.abs(fish.dx); }
+            if (fish.y < 0)     { fish.y = 0;    fish.dy = Math.abs(fish.dy); }
+            if (fish.y > maxY)  { fish.y = maxY; fish.dy = -Math.abs(fish.dy); }
+
+            const angle = Math.atan2(fish.dy, fish.dx) * 180 / Math.PI + 90;
+            fish.el.style.transform =
+                'translate3d(' + fish.x + 'px,' + fish.y + 'px,0) rotate(' + angle + 'deg)';
+            fish.lastAngle = angle;
+
+            // Wake ripple at tail
+            fish.rippleAccum += dt;
+            if (rippleEnabled && fish.rippleAccum >= RIPPLE_INTERVAL) {
+                fish.rippleAccum = 0;
+                const rad = (angle - 90) * Math.PI / 180;
+                const tailX = fish.x + fish.size / 2 - Math.cos(rad) * fish.size * 0.4;
+                const tailY = fish.y + fish.size / 2 - Math.sin(rad) * fish.size * 0.4;
+                $ripple.ripples('drop', tailX, tailY, 20, 0.05);
+            }
+
+            // Eat food (circle-vs-rect: use squared distance to size/2)
+            const eatR = fish.size / 2;
+            const eatR2 = eatR * eatR;
+            for (let i = foodList.length - 1; i >= 0; i--) {
+                const fd = foodList[i];
+                const ddx = fd.x - fcx;
+                const ddy = fd.y - fcy;
+                if (ddx * ddx + ddy * ddy <= eatR2) {
+                    removeFood(i);
+                    if (fish.size < MAX_FISH_SIZE) {
+                        fish.size = Math.min(MAX_FISH_SIZE, fish.size + FISH_GROWTH_STEP);
+                        fish.el.style.width = fish.size + 'px';
+                    }
+                }
+            }
+        }
+
+        let lastTime = performance.now();
+        function tick(now) {
+            const dt = Math.min(0.1, (now - lastTime) / 1000); // clamp big gaps (tab switch)
+            lastTime = now;
+            for (let i = 0; i < fishList.length; i++) updateFish(fishList[i], dt);
+            requestAnimationFrame(tick);
+        }
+
+        // --- Input handling ---
+        function isInUI(target) {
+            return controls.contains(target);
+        }
+
+        function dropFoodFromEvent(ev) {
+            if (isInUI(ev.target)) return;
+            const pts = ev.changedTouches || [ev];
+            for (let i = 0; i < pts.length; i++) {
+                const p = pts[i];
+                const x = p.clientX, y = p.clientY;
+                if (x == null || y == null) continue;
+                addFood(x, y);
+                if (rippleEnabled) $ripple.ripples('drop', x, y, 25, 0.08);
+            }
+        }
+
+        document.addEventListener('click', dropFoodFromEvent);
+        document.addEventListener('touchstart', (ev) => {
+            if (isInUI(ev.target)) return;
+            ev.preventDefault();
+            dropFoodFromEvent(ev);
+        }, { passive: false });
+
+        if (rippleEnabled) {
+            let lastMove = 0;
+            $ripple.on('mousemove', function (event) {
+                const t = event.timeStamp || performance.now();
+                if (t - lastMove < 30) return; // throttle ~33fps
+                lastMove = t;
+                $ripple.ripples('drop', event.clientX, event.clientY, 20, 0.04);
+            });
+        }
+
+        fishCountInput.addEventListener('input', (e) => setFishCount(e.target.value));
+        clearFoodBtn.addEventListener('click', clearAllFood);
+
+        // Keep pause on tab hidden to avoid runaway ripple drops
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) lastTime = performance.now();
         });
 
-        rippleContainer.ripples({
-            resolution: 512,
-            dropRadius: 20, // 半径
-            perturbance: 0.04,
+        let resizeRaf = 0;
+        window.addEventListener('resize', () => {
+            if (resizeRaf) return;
+            resizeRaf = requestAnimationFrame(() => {
+                resizeRaf = 0;
+                viewportW = window.innerWidth;
+                viewportH = window.innerHeight;
+                // Re-clamp fish positions inside new viewport
+                for (const f of fishList) {
+                    f.x = Math.min(f.x, Math.max(0, viewportW - f.size));
+                    f.y = Math.min(f.y, Math.max(0, viewportH - f.size));
+                }
+            });
         });
 
-        rippleContainer.on('mousemove', (event) => {
-            const { clientX, clientY } = event;
-            rippleContainer.ripples('drop', clientX, clientY, 20, 0.04);
-        });
-
-        document.addEventListener('click', (event) => {
-            const { clientX, clientY } = event;
-            createFoodElement(clientX, clientY);
-        });
-
-        // 初始化鱼数量
-        createFish(document.getElementById('fishCount').value);
+        // Init
+        setFishCount(fishCountInput.value);
+        requestAnimationFrame((t) => { lastTime = t; tick(t); });
+    })();
     </script>
 </body>
 </html>
