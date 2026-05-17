@@ -36,10 +36,13 @@
             width: 50px;
             height: auto;
             transform: translate3d(0, 0, 0);
-            transition: width 0.3s ease;
+            transition: width 0.4s ease-out;
             will-change: transform;
             pointer-events: none;
-            filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.25));
+            /* soft cast shadow on the "water surface" below + a hint of depth */
+            filter:
+                drop-shadow(0 6px 5px rgba(8, 30, 50, 0.25))
+                drop-shadow(0 1px 1px rgba(0, 0, 0, 0.2));
         }
         .food {
             position: absolute;
@@ -154,8 +157,16 @@
         const INITIAL_FISH_SIZE = 50;
         const FISH_GROWTH_STEP = 15;
         const MAX_FISH_SIZE = 200;
-        const FISH_SPEED = 60;          // px per second
-        const RIPPLE_INTERVAL = 0.25;   // seconds between fish wake ripples
+        const CRUISE_SPEED = 32;        // px/s when wandering
+        const CHASE_SPEED = 95;         // px/s when chasing food
+        const SPEED_LERP = 1.8;         // how fast speed adapts (1/s)
+        const MAX_TURN_RATE = 2.6;      // rad/s — limits sharpness of turns
+        const WALL_MARGIN = 70;         // px — start veering away from edges
+        const WANDER_FREQ = 0.35;       // Hz — slow heading drift
+        const TAIL_BEAT_BASE = 1.8;     // Hz at rest
+        const TAIL_BEAT_PER_SPEED = 0.045;
+        const TAIL_BEAT_AMP = 0.22;     // radians (~12.5°)
+        const RIPPLE_INTERVAL = 0.18;   // seconds between fish wake puffs
 
         let viewportW = window.innerWidth;
         let viewportH = window.innerHeight;
@@ -165,16 +176,18 @@
 
         let rippleEnabled = false;
         try {
-            $ripple.ripples({ resolution: 512, dropRadius: 20, perturbance: 0.04 });
+            $ripple.ripples({ resolution: 512, dropRadius: 18, perturbance: 0.025 });
             rippleEnabled = true;
         } catch (e) {
             // WebGL not supported – fall back gracefully without ripples
             console.warn('Ripples unavailable:', e && e.message);
         }
 
-        function randomDirection() {
-            const a = Math.random() * Math.PI * 2;
-            return { x: Math.cos(a), y: Math.sin(a) };
+        function wrapAngle(a) {
+            // wrap into (-PI, PI]
+            a = (a + Math.PI) % (Math.PI * 2);
+            if (a < 0) a += Math.PI * 2;
+            return a - Math.PI;
         }
 
         function createFish() {
@@ -187,16 +200,17 @@
             el.style.width = size + 'px';
             document.body.appendChild(el);
 
-            const dir = randomDirection();
             return {
                 el,
                 size,
                 x: Math.random() * Math.max(1, viewportW - size),
                 y: Math.random() * Math.max(1, viewportH - size),
-                dx: dir.x,
-                dy: dir.y,
-                rippleAccum: Math.random() * RIPPLE_INTERVAL,
-                lastAngle: 0
+                heading: Math.random() * Math.PI * 2,
+                speed: CRUISE_SPEED,
+                wanderPhase: Math.random() * Math.PI * 2,
+                wanderTarget: (Math.random() - 0.5) * 1.2, // bias for current wander arc
+                beatPhase: Math.random() * Math.PI * 2,
+                rippleAccum: Math.random() * RIPPLE_INTERVAL
             };
         }
 
@@ -236,56 +250,116 @@
         }
 
         function updateFish(fish, dt) {
-            // Seek nearest food
-            let nearest = null;
-            let nearestD2 = Infinity;
             const fcx = fish.x + fish.size / 2;
             const fcy = fish.y + fish.size / 2;
+
+            // --- 1. Find nearest food ---
+            let nearest = null;
+            let nearestD2 = Infinity;
             for (let i = 0; i < foodList.length; i++) {
                 const fd = foodList[i];
                 const ddx = fd.x - fcx;
                 const ddy = fd.y - fcy;
                 const d2 = ddx * ddx + ddy * ddy;
-                if (d2 < nearestD2) {
-                    nearestD2 = d2;
-                    nearest = fd;
-                }
+                if (d2 < nearestD2) { nearestD2 = d2; nearest = fd; }
             }
+
+            // --- 2. Decide desired heading & target speed ---
+            let desired = fish.heading;
+            let targetSpeed = CRUISE_SPEED;
+
             if (nearest) {
-                const ddx = nearest.x - fcx;
-                const ddy = nearest.y - fcy;
-                const m = Math.hypot(ddx, ddy) || 1;
-                fish.dx = ddx / m;
-                fish.dy = ddy / m;
+                desired = Math.atan2(nearest.y - fcy, nearest.x - fcx);
+                // Burst-faster the closer it gets; tops out at CHASE_SPEED
+                const d = Math.sqrt(nearestD2);
+                const eagerness = Math.min(1, 400 / (d + 60));
+                targetSpeed = CRUISE_SPEED + (CHASE_SPEED - CRUISE_SPEED) * eagerness;
+            } else {
+                // Lazy wandering: drift the desired heading along a slow sinusoid
+                fish.wanderPhase += dt * WANDER_FREQ * Math.PI * 2;
+                if (Math.random() < dt * 0.4) {
+                    // occasionally pick a new wander bias
+                    fish.wanderTarget = (Math.random() - 0.5) * 1.6;
+                }
+                desired = fish.heading
+                        + Math.sin(fish.wanderPhase) * 0.35
+                        + fish.wanderTarget * dt;
             }
 
-            fish.x += FISH_SPEED * fish.dx * dt;
-            fish.y += FISH_SPEED * fish.dy * dt;
+            // --- 3. Soft wall avoidance: blend in an "away from edge" heading ---
+            const distL = fcx;
+            const distR = viewportW - fcx;
+            const distT = fcy;
+            const distB = viewportH - fcy;
+            const minDist = Math.min(distL, distR, distT, distB);
+            if (minDist < WALL_MARGIN) {
+                const ax = (1 / Math.max(distL, 1)) - (1 / Math.max(distR, 1));
+                const ay = (1 / Math.max(distT, 1)) - (1 / Math.max(distB, 1));
+                const awayHeading = Math.atan2(-ay, -ax);
+                const weight = 1 - minDist / WALL_MARGIN; // 0..1, stronger near wall
+                // Blend desired toward awayHeading by 'weight'
+                desired = fish.heading
+                        + wrapAngle(desired - fish.heading) * (1 - weight)
+                        + wrapAngle(awayHeading - fish.heading) * weight;
+                // Slow down a bit when steering away from a wall
+                targetSpeed *= (1 - weight * 0.4);
+            }
 
-            const maxX = viewportW - fish.size;
-            const maxY = viewportH - fish.size;
-            if (fish.x < 0)     { fish.x = 0;    fish.dx = Math.abs(fish.dx); }
-            if (fish.x > maxX)  { fish.x = maxX; fish.dx = -Math.abs(fish.dx); }
-            if (fish.y < 0)     { fish.y = 0;    fish.dy = Math.abs(fish.dy); }
-            if (fish.y > maxY)  { fish.y = maxY; fish.dy = -Math.abs(fish.dy); }
+            // --- 4. Smooth heading & speed ---
+            const dh = wrapAngle(desired - fish.heading);
+            const maxTurn = MAX_TURN_RATE * dt;
+            fish.heading += dh > maxTurn ? maxTurn : (dh < -maxTurn ? -maxTurn : dh);
+            fish.speed += (targetSpeed - fish.speed) * Math.min(1, dt * SPEED_LERP);
 
-            const angle = Math.atan2(fish.dy, fish.dx) * 180 / Math.PI + 90;
+            // --- 5. Tail beat: faster when swimming faster, amplitude eases with speed ---
+            const beatHz = TAIL_BEAT_BASE + fish.speed * TAIL_BEAT_PER_SPEED;
+            fish.beatPhase += dt * beatHz * Math.PI * 2;
+            const beat = Math.sin(fish.beatPhase);
+            const beatAmp = TAIL_BEAT_AMP * (0.35 + Math.min(1, fish.speed / CHASE_SPEED) * 0.65);
+
+            // --- 6. Advance position ---
+            fish.x += Math.cos(fish.heading) * fish.speed * dt;
+            fish.y += Math.sin(fish.heading) * fish.speed * dt;
+
+            // Hard clamp (should rarely trigger thanks to soft avoidance)
+            const maxX = Math.max(0, viewportW - fish.size);
+            const maxY = Math.max(0, viewportH - fish.size);
+            if (fish.x < 0) fish.x = 0;
+            else if (fish.x > maxX) fish.x = maxX;
+            if (fish.y < 0) fish.y = 0;
+            else if (fish.y > maxY) fish.y = maxY;
+
+            // --- 7. Visual transform: heading + tail sway. Image faces up, so +90°. ---
+            const visualRad = fish.heading + beat * beatAmp;
+            const angleDeg = visualRad * 180 / Math.PI + 90;
             fish.el.style.transform =
-                'translate3d(' + fish.x + 'px,' + fish.y + 'px,0) rotate(' + angle + 'deg)';
-            fish.lastAngle = angle;
+                'translate3d(' + fish.x + 'px,' + fish.y + 'px,0) rotate(' + angleDeg + 'deg)';
 
-            // Wake ripple at tail
+            // --- 8. Wake: a pair of small ripples behind the tail forming a V ---
             fish.rippleAccum += dt;
             if (rippleEnabled && fish.rippleAccum >= RIPPLE_INTERVAL) {
-                fish.rippleAccum = 0;
-                const rad = (angle - 90) * Math.PI / 180;
-                const tailX = fish.x + fish.size / 2 - Math.cos(rad) * fish.size * 0.4;
-                const tailY = fish.y + fish.size / 2 - Math.sin(rad) * fish.size * 0.4;
-                $ripple.ripples('drop', tailX, tailY, 20, 0.05);
+                fish.rippleAccum -= RIPPLE_INTERVAL;
+                const speedNorm = Math.min(1, fish.speed / CHASE_SPEED);
+                // Only produce a meaningful wake when actually swimming
+                if (speedNorm > 0.15) {
+                    const cosH = Math.cos(fish.heading);
+                    const sinH = Math.sin(fish.heading);
+                    const tailDist = fish.size * 0.42;
+                    const sideDist = fish.size * (0.10 + speedNorm * 0.08);
+                    const cx2 = fcx - cosH * tailDist;
+                    const cy2 = fcy - sinH * tailDist;
+                    // perpendicular (-sinH, cosH)
+                    const px = -sinH * sideDist;
+                    const py =  cosH * sideDist;
+                    const strength = 0.012 + speedNorm * 0.025;
+                    const radius = 9 + speedNorm * 6;
+                    $ripple.ripples('drop', cx2 + px, cy2 + py, radius, strength);
+                    $ripple.ripples('drop', cx2 - px, cy2 - py, radius, strength);
+                }
             }
 
-            // Eat food (circle-vs-rect: use squared distance to size/2)
-            const eatR = fish.size / 2;
+            // --- 9. Eat food (circle distance) ---
+            const eatR = fish.size * 0.45;
             const eatR2 = eatR * eatR;
             for (let i = foodList.length - 1; i >= 0; i--) {
                 const fd = foodList[i];
@@ -297,6 +371,7 @@
                         fish.size = Math.min(MAX_FISH_SIZE, fish.size + FISH_GROWTH_STEP);
                         fish.el.style.width = fish.size + 'px';
                     }
+                    if (rippleEnabled) $ripple.ripples('drop', fd.x, fd.y, 14, 0.05);
                 }
             }
         }
@@ -322,7 +397,13 @@
                 const x = p.clientX, y = p.clientY;
                 if (x == null || y == null) continue;
                 addFood(x, y);
-                if (rippleEnabled) $ripple.ripples('drop', x, y, 25, 0.08);
+                if (rippleEnabled) {
+                    // small impact + secondary expanding splash for a "plop" feel
+                    $ripple.ripples('drop', x, y, 14, 0.06);
+                    setTimeout(() => {
+                        if (rippleEnabled) $ripple.ripples('drop', x, y, 24, 0.025);
+                    }, 90);
+                }
             }
         }
 
@@ -334,12 +415,29 @@
         }, { passive: false });
 
         if (rippleEnabled) {
-            let lastMove = 0;
+            // Smear ripples along mouse motion: more drops the faster you move,
+            // each one small — gives a continuous trail instead of one big splash.
+            let lastMove = 0, lastMX = null, lastMY = null;
             $ripple.on('mousemove', function (event) {
                 const t = event.timeStamp || performance.now();
-                if (t - lastMove < 30) return; // throttle ~33fps
-                lastMove = t;
-                $ripple.ripples('drop', event.clientX, event.clientY, 20, 0.04);
+                if (t - lastMove < 16) return; // ~60fps cap
+                const x = event.clientX, y = event.clientY;
+                if (lastMX != null) {
+                    const dist = Math.hypot(x - lastMX, y - lastMY);
+                    const steps = Math.min(4, Math.max(1, Math.floor(dist / 14)));
+                    for (let i = 1; i <= steps; i++) {
+                        const f = i / steps;
+                        $ripple.ripples(
+                            'drop',
+                            lastMX + (x - lastMX) * f,
+                            lastMY + (y - lastMY) * f,
+                            10, 0.012
+                        );
+                    }
+                } else {
+                    $ripple.ripples('drop', x, y, 10, 0.012);
+                }
+                lastMove = t; lastMX = x; lastMY = y;
             });
         }
 
